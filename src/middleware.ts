@@ -98,10 +98,25 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // ─── Check role from user metadata ──────────────────────────────────────
-  // Role is stored in the users table — fetch from app_metadata or DB
-  // For performance, we store role in Supabase app_metadata on login
-  const userRole = (user.app_metadata?.role as UserRole | undefined) ?? "support_team";
+  // ─── Check role from the users table ────────────────────────────────────
+  // IMPORTANT: app_metadata.role is NOT populated anywhere in this app's auth
+  // flow (login only updates last_login_at). Reading it here silently fell
+  // back to "support_team" for every user, including admins. We query the
+  // `users` table directly instead — RLS policy "Users can read own profile"
+  // permits this for the authenticated caller.
+  const { data: dbUser, error: roleError } = await supabase
+    .from("users")
+    .select("role, is_active")
+    .eq("supabase_uid", user.id)
+    .single();
+
+  if (roleError || !dbUser || !dbUser.is_active) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("redirectTo", pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  const userRole = dbUser.role as UserRole;
 
   const allowedRoles = getAllowedRoles(pathname);
 
